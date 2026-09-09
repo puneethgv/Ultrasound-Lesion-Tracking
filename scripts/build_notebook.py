@@ -35,6 +35,7 @@ cells.append(md(
     "|---|---|\n"
     "| 0 | Setup & data-root check |\n"
     "| 1 | Cohort overview — class × site, mask coverage, acquisitions, QC |\n"
+    "| 1b | De-identification — burned-in PHI removal |\n"
     "| 2 | Anatomy of a single case — files, RF/envelope geometry |\n"
     "| 3 | B-mode reconstruction — DICOM vs envelope vs RF→B-mode |\n"
     "| 4 | Labels & **coordinate registration** (the critical open task) |\n"
@@ -98,6 +99,35 @@ cells.append(code(
     "ax[1,1].set_title(f\"Benign vs malignant  (excluded/QC: {int(cohort['excluded'].sum())})\")\n"
     "for i,v in enumerate(bm.values): ax[1,1].text(i, v, str(v), ha='center', va='bottom', fontsize=9)\n"
     "plt.tight_layout(); plt.show()\n"
+))
+
+# ---------------------------------------------------------------- Phase 1b
+cells.append(md(
+    "## Phase 1b — De-identification (burned-in PHI removal)\n"
+    "The DICOM cines have identifiers **burned into the pixels** (case ID, institution, acquisition "
+    "date, operator name) in the banner rows *outside* the ultrasound image. The DICOM declares the "
+    "image rectangle in `SequenceOfUltrasoundRegions`; keeping only those pixels removes all "
+    "burned-in PHI **without altering the ultrasound sector**. Header tags are scrubbed too. "
+    "`read_dicom(deidentify=True)` is the **default**, so every image below is already de-identified. "
+    "_Audit: 100% of the 490 DICOMs carry region metadata — no case relies on the geometric fallback._"
+))
+cells.append(code(
+    "import pydicom\n"
+    "from usloc.deid import ultrasound_region, deidentify_frames\n"
+    "dcm0 = list_dicoms(find_case_dir('CEUS014'))[0]\n"
+    "_, raw = read_dicom(dcm0, deidentify=False)      # raw (still has burned-in text)\n"
+    "ds0, clean = read_dicom(dcm0, deidentify=True)   # default: de-identified\n"
+    "reg = ultrasound_region(pydicom.dcmread(str(dcm0)))\n"
+    "f = raw.shape[0]//2\n"
+    "fig, ax = plt.subplots(1, 2, figsize=(9.5, 4.8))\n"
+    "show_gray(ax[0], raw[f], 'ORIGINAL — operator / site / date burned in')\n"
+    "ax[0].axhline(reg.y0, color='#ff3d00', lw=1.2); ax[0].axhline(reg.y1, color='#ff3d00', lw=1.2)\n"
+    "show_gray(ax[1], clean[f], 'DE-IDENTIFIED — region kept, banners removed')\n"
+    "plt.suptitle('De-identification (ultrasound sector unchanged)', fontweight='bold'); plt.tight_layout(); plt.show()\n"
+    "print('ultrasound region:', reg)\n"
+    "print('header scrubbed -> OperatorsName:', repr(ds0.get('OperatorsName','')),\n"
+    "      '| InstitutionName:', repr(ds0.get('InstitutionName','')),\n"
+    "      '| PatientID kept:', repr(ds0.get('PatientID','')))\n"
 ))
 
 # ---------------------------------------------------------------- Phase 2

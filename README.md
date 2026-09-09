@@ -11,6 +11,8 @@ over B-mode ("brightness"). Data comes from two sites — **TU Dresden** (train)
 ## Status
 
 - ✅ Environment, package scaffold, data readers (RF/envelope/DICOM), cohort builder, label parsers.
+- ✅ **De-identification pipeline** (`usloc/deid.py`) — region-based burned-in-PHI removal + header
+  scrub; on by default in `read_dicom`; audited to cover 100% of the 490 cines.
 - ✅ **Phase-based exploration notebook** (`notebooks/01_dataset_exploration.ipynb`).
 - ⏳ Next: resolve label↔image coordinate registration, dataset export, YOLO11-seg baseline, RF ablation.
 
@@ -28,9 +30,10 @@ Per case: DICOM cines (JPEG-LS, 800×800), raw RF (`*_rf.raw`/`*_rf_no_tgc.npy`)
 (`*_env.raw`), plus GUI bounding-box labels and (for ~142 cases) FLL_ROI spline masks. Site is encoded
 in the case-ID prefix (`UKH…` = Halle).
 
-> ⚠️ **PHI:** DICOM frames contain **burned-in patient identifiers**. Do not publish rendered images
-> without de-identification. Notebook outputs are stripped from git by default (`nbstripout`); keep the
-> repository private if you version rendered frames.
+> ⚠️ **PHI:** DICOM frames contain **burned-in identifiers** (case ID, institution, date, operator).
+> `read_dicom(deidentify=True)` (default) keeps only the declared ultrasound region and scrubs PHI
+> header tags — the ultrasound sector is never altered (`usloc/deid.py`, `scripts/audit_deid.py`).
+> Notebook outputs are also stripped from git by default (`nbstripout`) as defense-in-depth.
 
 ## Setup
 
