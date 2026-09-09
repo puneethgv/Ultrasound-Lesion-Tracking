@@ -38,7 +38,8 @@ cells.append(md(
     "| 1b | De-identification — burned-in PHI removal |\n"
     "| 2 | Anatomy of a single case — files, RF/envelope geometry |\n"
     "| 3 | B-mode reconstruction — DICOM vs envelope vs RF→B-mode |\n"
-    "| 4 | Labels & **coordinate registration** (the critical open task) |\n"
+    "| 4 | Labels & **coordinate registration** — the diagnostic (why it's hard) |\n"
+    "| 4b | Registration **resolved** — masks + boxes on the canonical image |\n"
     "| 5 | Class galleries — example lesions per type |\n"
     "| 6 | Next steps |\n"
 ))
@@ -244,6 +245,43 @@ cells.append(code(
     "ax[2].invert_yaxis(); ax[2].set_aspect('equal'); ax[2].set_title('spline contour (own coords)')\n"
     "plt.tight_layout(); plt.show()\n"
     "print('NOTE: overlays are diagnostic — final registration transform is resolved in the calibration step.')\n"
+))
+
+# ---------------------------------------------------------------- Phase 4b
+cells.append(md(
+    "## Phase 4b — Registration resolved ✅\n"
+    "Solved by inspecting coordinate ranges + overlays:\n"
+    "\n"
+    "* **Spline masks** are in the **scan-converted sector-crop space** → DICOM coords are "
+    "`(x + region.x0, y + region.y0)`, and `spline.Frame` indexes `0_0.dcm` (= `raw_0_0`).\n"
+    "* **GUI boxes** are in the pre-scan **RF grid** of `raw_0_0` (h→sample, v→line); for the 142 "
+    "spline cases the bounding box is derived directly from the mask.\n"
+    "\n"
+    "Canonical training image = the **de-identified sector crop** of `0_0.dcm` at the annotated "
+    "frame. `usloc.labels.register_case(case)` returns `(image, mask, bbox)` ready for export. Below: "
+    "a QA gallery across both sites, all 3 classes, and varying region offsets."
+))
+cells.append(code(
+    "from usloc.labels import register_case\n"
+    "spl_cohort = cohort[cohort.has_spline]\n"
+    "picks = []\n"
+    "for cls in C.CLASSES:\n"
+    "    for site in ['Dresden','Halle']:\n"
+    "        picks += list(spl_cohort[(spl_cohort['class']==cls)&(spl_cohort['site']==site)]['case'].head(2))\n"
+    "picks = picks[:15]\n"
+    "ncol=5; nrow=int(np.ceil(len(picks)/ncol))\n"
+    "fig, ax = plt.subplots(nrow, ncol, figsize=(3.1*ncol, 3.1*nrow), squeeze=False)\n"
+    "for i in range(nrow*ncol):\n"
+    "    a = ax[i//ncol][i%ncol]; a.set_xticks([]); a.set_yticks([])\n"
+    "    if i >= len(picks): a.axis('off'); continue\n"
+    "    s = register_case(picks[i], space='crop')\n"
+    "    if s is None: a.axis('off'); continue\n"
+    "    a.imshow(overlay_mask(s.image, s.mask, (0,229,255), 0.45), aspect='auto')\n"
+    "    if s.bbox: draw_box(a, s.bbox, '#ffee00', lw=1.2)\n"
+    "    row = cohort[cohort.case==picks[i]].iloc[0]\n"
+    "    a.set_title(f\"{picks[i]}·{row['class'][:4]}·{row['site'][:3]}\", fontsize=8)\n"
+    "plt.suptitle('Registered lesion mask + derived bbox on de-identified canonical B-mode', fontweight='bold', y=1.0)\n"
+    "plt.tight_layout(); plt.show()\n"
 ))
 
 # ---------------------------------------------------------------- Phase 5
