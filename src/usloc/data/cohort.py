@@ -31,7 +31,8 @@ def load_master_clinical(path: str | Path | None = None) -> pd.DataFrame:
     df = pd.read_excel(path, sheet_name="focal_lesions")
     df = df.rename(columns={"patients_id": "case"})
     df["case"] = df["case"].astype(str).str.strip()
-    return df
+    # one row per case (avoid many-to-one merge fan-out downstream)
+    return df.drop_duplicates("case", keep="first")
 
 
 def load_qc_flags(path: str | Path | None = None) -> pd.DataFrame:
@@ -64,7 +65,7 @@ def load_qc_flags(path: str | Path | None = None) -> pd.DataFrame:
         note = " | ".join(notes)
         excluded = bool(re.search(r"aussortiert", note, re.IGNORECASE))
         rows.append({"case": case.strip(), "qc_note": note, "excluded": excluded})
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows).drop_duplicates("case", keep="first")
 
 
 def build_cohort(gui_root: str | Path | None = None) -> pd.DataFrame:
@@ -113,4 +114,5 @@ def build_cohort(gui_root: str | Path | None = None) -> pd.DataFrame:
         cohort["qc_note"] = pd.NA
         cohort["excluded"] = False
     cohort["excluded"] = cohort.get("excluded", False).fillna(False)
-    return cohort
+    # guarantee one row per case even if a spreadsheet had duplicate keys
+    return cohort.drop_duplicates("case", keep="first").reset_index(drop=True)

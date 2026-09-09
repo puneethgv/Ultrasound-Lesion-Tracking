@@ -34,6 +34,7 @@ class RegisteredSample:
     image: np.ndarray          # (H, W) de-identified B-mode, canonical space
     mask: np.ndarray           # (H, W) uint8 lesion mask (0/1), or empty if no spline
     bbox: tuple[int, int, int, int] | None  # (x0, y0, x1, y1) in image coords
+    polygon: np.ndarray | None  # (N, 2) lesion contour in image coords, or None
     frame: int
     region: Region
     space: str                 # "crop" or "full"
@@ -90,13 +91,17 @@ def register_case(case: str, *, space: str = "crop", frame: int | None = None) -
     H, W = image.shape[-2], image.shape[-1]
     mask = np.zeros((H, W), dtype=np.uint8)
     bbox = None
+    polygon = None
     if sp is not None and len(sp.x) >= 3:
-        mask = rasterize_spline(np.asarray(sp.x) + ox, np.asarray(sp.y) + oy, (H, W))
+        px = np.clip(np.asarray(sp.x) + ox, 0, W - 1)
+        py = np.clip(np.asarray(sp.y) + oy, 0, H - 1)
+        polygon = np.stack([px, py], axis=1)
+        mask = rasterize_spline(px, py, (H, W))
         ys, xs = np.where(mask)
         if len(xs):
             bbox = (int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max()))
 
     return RegisteredSample(
         case=case, image=np.asarray(image, dtype=np.float32), mask=mask,
-        bbox=bbox, frame=fr, region=region, space=space,
+        bbox=bbox, polygon=polygon, frame=fr, region=region, space=space,
     )

@@ -18,8 +18,8 @@ ipykernel>=6.29
 nbformat>=5.10
 nbconvert>=7.16
 
-# Deep learning (already provided by the system site-packages: torch 2.7 + CUDA)
-# torch  — installed at system level; not pinned here to avoid re-downloading CUDA wheels
-# ultralytics and transformers are added in Phase 4/5 when modeling begins:
-# ultralytics>=8.3
-# transformers>=4.44
+# Deep learning (torch 2.7 + CUDA come from system site-packages; not re-pinned here)
+ultralytics>=8.3          # YOLO11-seg baseline
+# NOTE: pip-installing ultralytics/opencv can pull numpy>=2 and break the system torch/pandas ABI.
+# After any such install, re-pin:  pip install "numpy==1.26.4" "opencv-python-headless==4.10.0.84"
+# transformers>=4.44      # added in Phase 5 (RT-DETR / Mask2Former comparison)
