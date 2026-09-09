@@ -1,0 +1,25 @@
+# Core scientific stack — pinned to the ABI the system torch/pandas/scipy were built against.
+numpy==1.26.4
+pandas>=2.1,<2.3
+scipy>=1.11,<1.13
+matplotlib>=3.6,<3.9
+pyyaml>=6.0
+
+# Imaging / IO
+opencv-python-headless==4.10.0.84   # 4.x supports numpy<2 (5.x forces numpy>=2)
+pydicom>=3.0
+python-gdcm>=3.0.24                  # JPEG-LS decoder for the compressed cines (numpy-ABI-agnostic)
+shapely>=2.0
+openpyxl>=3.1
+
+# Notebooks
+jupyter>=1.0
+ipykernel>=6.29
+nbformat>=5.10
+nbconvert>=7.16
+
+# Deep learning (already provided by the system site-packages: torch 2.7 + CUDA)
+# torch  — installed at system level; not pinned here to avoid re-downloading CUDA wheels
+# ultralytics and transformers are added in Phase 4/5 when modeling begins:
+# ultralytics>=8.3
+# transformers>=4.44

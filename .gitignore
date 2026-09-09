@@ -1,0 +1,27 @@
+# Environments
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+
+# Derived data / caches (never commit the dataset or derived artifacts)
+# NOTE: anchored to repo root so the src/usloc/data package is NOT ignored.
+/data/
+/outputs/
+/runs/
+wandb/
+lightning_logs/
+*.pt
+*.pth
+*.onnx
+
+# Notebook execution artifacts kept small: we DO commit notebooks, but not their heavy outputs
+# (outputs are embedded intentionally for review; large caches excluded above)
+
+# OS / editor
+.DS_Store
+._*
+.vscode/
+.idea/

@@ -1,0 +1,23 @@
+# Dataset configuration (paths can also be set via USLOC_DATA_ROOT / USLOC_DERIVED env vars).
+data_root: /media/ahmed-el-kaffas/20TB-HDD/Puneeth/Dresden_new
+
+classes: [fnh, hemangioma, metastasis]
+benign: [fnh, hemangioma]
+malignant: [metastasis]
+
+split:
+  scheme: external          # train+CV on Dresden, locked external test on Halle
+  train_site: Dresden       # case IDs NOT starting with UKH
+  test_site: Halle          # case IDs starting with UKH
+  cv_folds: 5               # patient-level stratified CV within Dresden
+  group_key: case           # never split a patient across folds
+
+reconstruction:
+  canonical: bmode          # envelope -> log-compress -> scan-convert
+  dynamic_range_db: 60
+  rf_representation: [raw_rf, qus_nakagami, qus_bsc]   # phase-2 ablation channels
+
+labels:
+  box_source: gui_xlsx      # Large_ROI / Small_ROI
+  primary_box: small        # tight lesion box as detection target
+  mask_source: fll_roi_pkl  # spline contours -> polygon masks
