@@ -13,8 +13,13 @@ over B-mode ("brightness"). Data comes from two sites — **TU Dresden** (train)
 - ✅ Environment, package scaffold, data readers (RF/envelope/DICOM), cohort builder, label parsers.
 - ✅ **De-identification pipeline** (`usloc/deid.py`) — region-based burned-in-PHI removal + header
   scrub; on by default in `read_dicom`; audited to cover 100% of the 490 cines.
-- ✅ **Phase-based exploration notebook** (`notebooks/01_dataset_exploration.ipynb`).
-- ⏳ Next: resolve label↔image coordinate registration, dataset export, YOLO11-seg baseline, RF ablation.
+- ✅ **Label↔image registration** solved (`usloc/labels/register.py`) and validated across sites/classes.
+- ✅ **Notebooks:** `01_dataset_exploration.ipynb` (data tour) and `02_training_method1_nnunet.ipynb`
+  (training + segmentation results), both with de-identified figures.
+- ✅ **Models:** benign/malignant **classifier** works (0.90 Dresden val / 0.65 Halle external);
+  **nnU-Net** segmentation baseline (peak val Dice ≈0.16; Halle external ≈0.08 / 17% detected) —
+  localization is data-limited (~140 unique lesions). YOLO detection overfits (val ≈0).
+- ⏳ Next: nnU-Net 5-fold ensemble, tighter/higher-res ROI, patient-grouped multi-frame, RF/QUS channels.
 
 See the full plan in the project notes; each plan phase maps to a notebook phase for easy tracking.
 
@@ -33,7 +38,8 @@ in the case-ID prefix (`UKH…` = Halle).
 > ⚠️ **PHI:** DICOM frames contain **burned-in identifiers** (case ID, institution, date, operator).
 > `read_dicom(deidentify=True)` (default) keeps only the declared ultrasound region and scrubs PHI
 > header tags — the ultrasound sector is never altered (`usloc/deid.py`, `scripts/audit_deid.py`).
-> Notebook outputs are also stripped from git by default (`nbstripout`) as defense-in-depth.
+> All committed notebook figures are de-identified; the one raw "before" demo panel is pixelated so no
+> identifier is legible.
 
 ## Setup
 
