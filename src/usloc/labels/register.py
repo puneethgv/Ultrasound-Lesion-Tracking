@@ -54,6 +54,17 @@ def _find_0_0_dicom(case_dir: Path):
     return dcms[0]
 
 
+def spline_offset(region: Region | None, space: str) -> tuple[int, int]:
+    """Offset added to native spline (x, y) to land in the canonical image.
+
+    In ``crop`` space the spline coords are native (0, 0); in ``full`` space they shift by the
+    ultrasound-region origin. Shared by the single-frame (:func:`register_case`) and multi-frame paths.
+    """
+    if space == "crop" and region is not None:
+        return 0, 0
+    return (region.x0, region.y0) if region is not None else (0, 0)
+
+
 def register_case(case: str, *, space: str = "crop", frame: int | None = None) -> RegisteredSample | None:
     """Build the registered (image, mask, bbox) sample for a case from its spline annotation.
 
@@ -80,12 +91,10 @@ def register_case(case: str, *, space: str = "crop", frame: int | None = None) -
     fr = frame if frame is not None else (sp.frame if sp is not None else frames.shape[0] // 2)
     fr = int(np.clip(fr, 0, frames.shape[0] - 1))
 
-    if space == "crop" and region is not None:
-        image = deidentify_frames(frames[fr], region=region, mode="crop")
-        ox, oy = 0, 0  # spline coords are native in crop space
-    else:
-        image = deidentify_frames(frames[fr], region=region, mode="mask")
-        ox, oy = (region.x0, region.y0) if region is not None else (0, 0)
+    mode = "crop" if (space == "crop" and region is not None) else "mask"
+    image = deidentify_frames(frames[fr], region=region, mode=mode)
+    ox, oy = spline_offset(region, space)
+    if mode == "mask":
         space = "full"
 
     H, W = image.shape[-2], image.shape[-1]

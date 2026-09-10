@@ -20,11 +20,17 @@ def main() -> None:
     ap.add_argument("--val-frac", type=float, default=0.2)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--min-mask-area", type=int, default=30)
+    ap.add_argument("--multiframe", action="store_true", help="expand each case across its cine")
+    ap.add_argument("--class-agnostic", action="store_true", help="single 'lesion' class")
+    ap.add_argument("--corr-thresh", type=float, default=0.85)
+    ap.add_argument("--max-frames", type=int, default=40)
     args = ap.parse_args()
 
     summary = export_yolo_seg(
         args.out, space=args.space, val_frac=args.val_frac,
         seed=args.seed, min_mask_area=args.min_mask_area,
+        multiframe=args.multiframe, class_agnostic=args.class_agnostic,
+        corr_thresh=args.corr_thresh, max_frames=args.max_frames,
     )
     print(json.dumps({k: v for k, v in summary.items() if k != "skipped"}, indent=2))
     print("skipped:", len(summary["skipped"]))
