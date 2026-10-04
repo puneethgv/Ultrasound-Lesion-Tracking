@@ -29,6 +29,7 @@ def export_crops(
     corr_thresh: float = 0.85,
     max_frames: int = 40,
     min_size: int = 16,
+    source: str = "rf",
 ) -> dict:
     """Write padded lesion crops as an ImageFolder tree and return per-(split,label) counts."""
     import cv2
@@ -47,7 +48,7 @@ def export_crops(
         label = BINARY_MAP[row["class"]] if task == "binary" else row["class"]
         dest = out_dir / split / label
         dest.mkdir(parents=True, exist_ok=True)
-        for s in iter_case_frames(case, corr_thresh=corr_thresh, max_frames=max_frames):
+        for s in iter_case_frames(case, corr_thresh=corr_thresh, max_frames=max_frames, source=source):
             x0, y0, x1, y1 = s.bbox
             bw, bh = x1 - x0, y1 - y0
             dx, dy = int(bw * pad), int(bh * pad)

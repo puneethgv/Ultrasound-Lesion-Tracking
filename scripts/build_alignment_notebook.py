@@ -1,16 +1,15 @@
 """Generate ``notebooks/03_mask_alignment_check.ipynb``.
 
-Cross-checks that the lesion annotation lands at the same anatomical location across representations,
-answering the question "are the masks applied correctly?". For each case, one row of four panels:
+Cross-checks where the lesion annotations land, answering "are the masks applied correctly?".
+For each case, one row of three panels:
 
-  A  native RF pre-scan (``_rf.raw``, no scan-conversion/resize) + GUI box (lives in this RF grid)
-  B  scan-converted RF (fan geometry, matches DICOM) + forward-mapped box
-  C  raw DICOM frame (no crop/resize) + spline mask at full coords (x+region.x0, y+region.y0)
-  D  our pipeline crop (register_case) + mask  — exactly what the model trains on
+  A  native RF pre-scan of the spline's acquisition/frame + GUI box + spline mapped into the RF grid
+     with the inverse QuantUS warp — two independent annotations, compared in the same grid
+  B  canonical RF fan image + mask (``register_case``, source='rf') — exactly what the model trains on
+  C  raw DICOM + spline under the *old* assumption (spline pixels == DICOM-crop pixels), for reference
 
-Key point: the spline **mask** lives in the DICOM (scan-converted) space; the GUI **box** lives in the
-RF pre-scan grid. The DICOM *is* the scanner's scan-converted RF, so if the box (A/B) and the mask
-(C/D) hit the same spot, the annotation is correctly placed.
+Key point: the spline pickles are QuantUS ROI exports drawn on QuantUS's own scan-conversion of the RF
+(``Scan Name``), with ``Frame`` indexing the RF frames — not DICOM pixels (see usloc.labels.quantus).
 """
 
 from __future__ import annotations
@@ -25,19 +24,21 @@ code = nbf.v4.new_code_cell
 cells: list = []
 
 cells.append(md(
-    "# Mask-alignment verification (RF ↔ DICOM ↔ pipeline)\n"
+    "# Mask-alignment verification (QuantUS spline ↔ RF ↔ GUI box)\n"
     "\n"
-    "Sanity check that the lesion **mask is applied at the correct location**, cross-checking against an "
-    "independent reconstruction from the raw **RF**.\n"
+    "The `FLL_ROI/*.pkl` splines are **QuantUS ROI exports** (`Spline X/Y`, `Scan Name`, "
+    "`Phantom Name`, `Frame`). QuantUS draws ROIs on *its own* scan-conversion of the Clarius RF "
+    "acquisition named by `Scan Name` (fixed settings: lines padded to 2928 samples, sector = "
+    "2·radius degrees, start depth = depth/4, height 500 px), and `Frame` indexes the **RF frames**. "
+    "They are **not** DICOM pixels — the earlier pipeline treated them as DICOM-crop pixels and "
+    "indexed `0_0.dcm` with `Frame`, which misplaced the masks.\n"
     "\n"
-    "Two annotation types live in **different coordinate spaces**:\n"
-    "- **spline mask** → the **DICOM scan-converted** (fan) image — what our pipeline uses;\n"
-    "- **GUI box** → the **RF pre-scan grid** (rectangular lines×samples).\n"
+    "Fix (`usloc.labels.quantus` + `register_case(source='rf')`): invert the QuantUS warp to put the "
+    "spline in the RF pre-scan grid `(line, sample)` — the same grid as the independent **GUI box** — "
+    "then render image and mask from that RF frame with one shared scan-conversion grid.\n"
     "\n"
-    "The DICOM *is* the scanner's reconstruction from RF (RF → beamform → **scan-convert** → display). "
-    "So if the box (from RF) and the mask (on the DICOM) land on the same lesion, placement is correct. "
-    "Per case: **A** native RF + box · **B** scan-converted RF + box · **C** raw DICOM + mask · "
-    "**D** our pipeline crop + mask."
+    "Per case: **A** RF pre-scan + GUI box + inverted spline · **B** canonical RF fan + mask (model "
+    "input) · **C** DICOM + spline under the old assumption."
 ))
 
 cells.append(code(
@@ -45,58 +46,41 @@ cells.append(code(
     "import glob, warnings; warnings.simplefilter('ignore')\n"
     "import numpy as np, matplotlib.pyplot as plt, pydicom\n"
     "from usloc import config as C\n"
-    "from usloc.data.discover import find_case_dir, list_dicoms, list_extracted\n"
-    "from usloc.io import parse_rawdata_yml, read_raw, read_dicom\n"
-    "from usloc.recon import rf_to_bmode, scan_convert, sector_angle_rad\n"
-    "from usloc.labels import load_boxes, load_spline, rasterize_spline, register_case\n"
+    "from usloc.data.discover import find_case_dir, list_dicoms\n"
+    "from usloc.io import read_dicom\n"
+    "from usloc.recon import rf_to_bmode\n"
+    "from usloc.labels import load_boxes, load_rf_case, rasterize_spline, register_case\n"
     "from usloc.deid import ultrasound_region\n"
     "from usloc.viz import show_gray, draw_box, overlay_mask\n"
     "plt.rcParams.update({'figure.dpi':110,'font.size':9,'axes.titlesize':8,'figure.facecolor':'white'})\n"
     "\n"
-    "def pick_c3(case):\n"
-    "    '''C3 preset with the most scan lines (widest FOV) that has a native _rf.raw.'''\n"
-    "    best = None\n"
-    "    for e in list_extracted(find_case_dir(case)):\n"
-    "        for pre, roles in e.presets.items():\n"
-    "            if pre.startswith('C3') and 'rf_raw' in roles and 'rf_yml' in roles:\n"
-    "                g = parse_rawdata_yml(roles['rf_yml'])\n"
-    "                if best is None or g.number_of_lines > best[0].number_of_lines:\n"
-    "                    best = (g, roles)\n"
-    "    return best\n"
-    "\n"
-    "def small_box(case):\n"
+    "def gui_box(case, kind='large'):\n"
     "    bs = load_boxes(glob.glob(str(C.GUI_ROOT/'gui_*'/f'{case}.xlsx'))[0])\n"
-    "    return next((b for b in bs if b.roi_kind=='small'), bs[0])\n"
+    "    return next((b for b in bs if b.roi_kind==kind), bs[0])\n"
 ))
 
 cells.append(code(
     "def alignment_row(case):\n"
-    "    g, roles = pick_c3(case)\n"
-    "    rf = read_raw(roles['rf_raw'], g)                 # (frames, lines, samples) native RF\n"
-    "    box = small_box(case); h1,v1,h2,v2 = box.xyxy     # h=sample, v=line (RF grid)\n"
-    "    bf = min(box.frame, rf.shape[0]-1)\n"
-    "    prescan = rf_to_bmode(rf[bf], axis=1)             # (lines, samples)\n"
-    "    sect = sector_angle_rad(g.number_of_lines, g.probe_pitch_um, g.probe_radius_mm)\n"
-    "    fan, fwd = scan_convert(prescan, radius_mm=g.probe_radius_mm, depth_mm=g.imaging_depth_mm,\n"
-    "                            sector_rad=sect, out_h=560)\n"
-    "    corners = np.array([fwd(v,h) for v,h in [(v1,h1),(v1,h2),(v2,h2),(v2,h1),(v1,h1)]])\n"
-    "    # DICOM + mask (no transform) and pipeline crop + mask\n"
+    "    rc = load_rf_case(case)                                 # spline's own RF acquisition\n"
+    "    fr = int(np.clip(rc.spline.frame, 0, rc.n_frames-1))    # Frame indexes RF frames\n"
+    "    prescan = rf_to_bmode(rc.rf[fr].astype(np.float32), axis=1)   # (lines, samples)\n"
+    "    box = gui_box(case); h0,v0,h1,v1 = box.xyxy             # h = sample, v = line\n"
+    "    s = register_case(case)                                 # canonical RF fan + aligned mask\n"
+    "    # old assumption, for reference: spline pixels == DICOM-crop pixels, Frame indexes 0_0.dcm\n"
     "    d = [p for p in list_dicoms(find_case_dir(case)) if p.name.startswith('0_0')][0]\n"
-    "    ds, frames = read_dicom(d, deidentify=True)\n"
-    "    reg = ultrasound_region(pydicom.dcmread(str(d)))\n"
-    "    sp = load_spline(str(C.FLL_ROI_DIR/f'{case}_roi.pkl')); sf = min(sp.frame, frames.shape[0]-1)\n"
-    "    maskD = rasterize_spline(np.asarray(sp.x)+reg.x0, np.asarray(sp.y)+reg.y0, frames.shape[1:])\n"
-    "    s = register_case(case, space='crop')\n"
+    "    _, frames = read_dicom(d, deidentify=True)\n"
+    "    reg = ultrasound_region(pydicom.dcmread(str(d))); sf = min(rc.spline.frame, frames.shape[0]-1)\n"
+    "    old = rasterize_spline(np.asarray(rc.spline.x)+reg.x0, np.asarray(rc.spline.y)+reg.y0, frames.shape[1:])\n"
     "\n"
-    "    fig, ax = plt.subplots(1, 4, figsize=(16, 4.4))\n"
-    "    show_gray(ax[0], prescan, f'{case}  A: native RF _rf.raw + box  (frame {bf})')\n"
-    "    draw_box(ax[0], (h1,v1,h2,v2), '#00e5ff')\n"
-    "    show_gray(ax[1], fan, 'B: scan-converted RF (fan) + box')\n"
-    "    ax[1].plot(corners[:,0], corners[:,1], '-', color='#00e5ff', lw=1.8)\n"
-    "    ax[2].imshow(overlay_mask(frames[sf], maskD, (255,0,200), 0.5), aspect='auto')\n"
-    "    ax[2].set_title(f'C: raw DICOM (no transform) + mask  (frame {sf})'); ax[2].set_xticks([]); ax[2].set_yticks([])\n"
-    "    ax[3].imshow(overlay_mask(s.image, s.mask, (255,0,200), 0.5), aspect='auto')\n"
-    "    ax[3].set_title('D: our pipeline crop + mask (model input)'); ax[3].set_xticks([]); ax[3].set_yticks([])\n"
+    "    fig, ax = plt.subplots(1, 3, figsize=(14, 4.4))\n"
+    "    show_gray(ax[0], prescan.T, f'{case}  A: RF pre-scan (frame {fr}) — box vs inverted spline')\n"
+    "    draw_box(ax[0], (v0,h0,v1,h1), '#00e5ff', 'GUI box')\n"
+    "    pl = rc.prescan_polygon\n"
+    "    ax[0].plot(np.r_[pl[:,0], pl[0,0]], np.r_[pl[:,1], pl[0,1]], '-', color='#ff00c8', lw=1.4)\n"
+    "    ax[1].imshow(overlay_mask(s.image, s.mask, (255,0,200), 0.45)); ax[1].set_xticks([]); ax[1].set_yticks([])\n"
+    "    ax[1].set_title('B: canonical RF fan + mask (model input)')\n"
+    "    ax[2].imshow(overlay_mask(frames[sf], old, (255,160,0), 0.5), aspect='auto'); ax[2].set_xticks([]); ax[2].set_yticks([])\n"
+    "    ax[2].set_title(f'C: DICOM + OLD mapping (frame {sf}) — for reference')\n"
     "    plt.tight_layout(); plt.show()\n"
     "\n"
     "cases = ['CEUS017', 'CEUS003', 'UKHCEUS003', 'UKDCEUS029', 'CEUS014']\n"
@@ -108,17 +92,18 @@ cells.append(code(
 ))
 
 cells.append(md(
-    "## Verdict\n"
-    "- **The mask is applied correctly.** In every row, panels **C** (raw DICOM, no transform) and **D** "
-    "(our pipeline crop) place the mask on the same visible lesion — and D is just C cropped, so the "
-    "pipeline preserves the location (no resize/shift bug).\n"
-    "- **The independent RF box agrees.** Reconstructing from the native `_rf.raw` and scan-converting "
-    "(**B**) reproduces the DICOM fan, and the box lands on the same lesion — so the two annotations, in "
-    "two different coordinate systems, point to the same anatomy.\n"
-    "- **Caveats (not bugs):** overlaying the spline mask directly on the *native* RF pre-scan (A) would "
-    "not line up — that is the scan-conversion geometry difference. The scan-conversion here is "
-    "approximate (radius/angle from the YAML, no vendor calibration); use the native `_rf.raw` "
-    "(1920 samples), **not** the `_rf_no_tgc.npy` (2928 samples, resampled), for correct axial scaling."
+    "## How to read this\n"
+    "- **A** is the decisive check: the GUI box and the spline are independent annotations; after "
+    "inverting the QuantUS warp both sit in the same RF grid and should outline the same lesion. "
+    "Run `python scripts/validate_alignment.py --gallery 24` for the numbers over **all** spline cases "
+    "(IoU per case, flagged outliers).\n"
+    "- **B** is what the model now trains on: image and mask are rendered from the same RF frame "
+    "through one shared grid, so they are aligned by construction (the fan geometry itself is "
+    "approximate, which affects realism, not alignment).\n"
+    "- **C** shows the previous mapping. Wherever its mask misses the lesion seen in B, the old "
+    "training labels were wrong — retrain nnU-Net / YOLO / the classifier on the re-exported data.\n"
+    "- Raw `*_rf.raw` files are now parsed with their Clarius header + per-frame timestamps "
+    "(`read_clarius_raw`); the old flat read shifted frame *k* by 10 + 4k samples."
 ))
 
 nb = nbf.v4.new_notebook(cells=cells)

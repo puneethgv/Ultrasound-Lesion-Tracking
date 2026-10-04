@@ -6,7 +6,8 @@ Layout produced under ``$nnUNet_raw/Dataset<ID>_<name>/``:
     dataset.json
 
 One frame per patient (the annotated frame) so nnU-Net's internal case-level CV stays patient-clean.
-Binary task: background=0, lesion=1 (localization). Reuses ``register_case`` (de-identified crop).
+Binary task: background=0, lesion=1 (localization). Reuses ``register_case`` (``source='rf'``: the
+RF-reconstructed fan image with the QuantUS-aligned mask; ``'dicom'`` = legacy, misaligned).
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ def export_nnunet(
     name: str = "Lesion",
     *,
     space: str = "crop",
+    source: str = "rf",
     include_test: bool = True,
     raw_root: str | Path | None = None,
 ) -> dict:
@@ -41,7 +43,7 @@ def export_nnunet(
     df = cohort[cohort.has_spline & (~cohort.excluded.astype(bool))]
     n_tr, n_ts, skipped = 0, 0, []
     for _, row in df.iterrows():
-        s = register_case(row["case"], space=space)
+        s = register_case(row["case"], source=source, space=space)
         if s is None or s.bbox is None:
             skipped.append(row["case"])
             continue

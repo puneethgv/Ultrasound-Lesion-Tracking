@@ -13,10 +13,18 @@ over B-mode ("brightness"). Data comes from two sites — **TU Dresden** (train)
 - ✅ Environment, package scaffold, data readers (RF/envelope/DICOM), cohort builder, label parsers.
 - ✅ **De-identification pipeline** (`usloc/deid.py`) — region-based burned-in-PHI removal + header
   scrub; on by default in `read_dicom`; audited to cover 100% of the 490 cines.
-- ✅ **Label↔image registration** solved (`usloc/labels/register.py`) and validated across sites/classes.
+- ✅ **Label↔image registration — corrected.** The `FLL_ROI` splines are **QuantUS ROI exports**:
+  drawn on QuantUS's own scan-conversion of the RF acquisition (`Scan Name`), with `Frame` indexing RF
+  frames — not DICOM pixels. The earlier DICOM-crop mapping misplaced the masks.
+  `usloc/labels/quantus.py` inverts the QuantUS warp into the RF grid (where the GUI boxes live) and
+  `register_case` (default `source='rf'`) renders image + mask from that RF frame through one grid.
+  Validate on the data with `python scripts/validate_alignment.py --gallery 24`.
+- ✅ Clarius `*.raw` now parsed with header + per-frame timestamps (`read_clarius_raw`); the old flat
+  read shifted frame *k* by 10 + 4k samples.
 - ✅ **Notebooks:** `01_dataset_exploration.ipynb` (data tour) and `02_training_method1_nnunet.ipynb`
   (training + segmentation results), both with de-identified figures.
-- ✅ **Models:** benign/malignant **classifier** works (0.90 Dresden val / 0.65 Halle external);
+- ⚠️ **Models below were trained on the old, misaligned masks — re-export and retrain.**
+- **Models:** benign/malignant **classifier** works (0.90 Dresden val / 0.65 Halle external);
   **nnU-Net** segmentation baseline (peak val Dice ≈0.16; Halle external ≈0.08 / 17% detected) —
   localization is data-limited (~140 unique lesions). YOLO detection overfits (val ≈0).
 - ⏳ Next: nnU-Net 5-fold ensemble, tighter/higher-res ROI, patient-grouped multi-frame, RF/QUS channels.

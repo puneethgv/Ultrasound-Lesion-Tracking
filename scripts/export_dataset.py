@@ -16,6 +16,8 @@ from usloc.datasets import export_yolo_seg
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default=None)
+    ap.add_argument("--source", default="rf", choices=["rf", "dicom"],
+                    help="rf = aligned RF fan images (default); dicom = legacy, misaligned masks")
     ap.add_argument("--space", default="crop", choices=["crop", "full"])
     ap.add_argument("--val-frac", type=float, default=0.2)
     ap.add_argument("--seed", type=int, default=0)
@@ -30,7 +32,7 @@ def main() -> None:
         args.out, space=args.space, val_frac=args.val_frac,
         seed=args.seed, min_mask_area=args.min_mask_area,
         multiframe=args.multiframe, class_agnostic=args.class_agnostic,
-        corr_thresh=args.corr_thresh, max_frames=args.max_frames,
+        corr_thresh=args.corr_thresh, max_frames=args.max_frames, source=args.source,
     )
     print(json.dumps({k: v for k, v in summary.items() if k != "skipped"}, indent=2))
     print("skipped:", len(summary["skipped"]))

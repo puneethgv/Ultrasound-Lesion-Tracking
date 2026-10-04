@@ -1,15 +1,20 @@
 """Readers for the Clarius-style raw acquisition files (``*_rf.raw`` / ``*_env.raw``) and their
 YAML sidecars, plus the pre-extracted ``*_rf_no_tgc.npy`` arrays.
 
-Geometry facts confirmed from the dataset (C3 curvilinear "hd3" probe):
-  * RF  yml: samples/line=1040, lines=64,  bytes=2 (int16), frames=68, sampling 15 MHz
-  * ENV yml: samples/line=480,  lines=192, bytes=1 (uint8), frames=68, type "B pre-scan"
-  * filesize(raw) == frames*lines*samples*bytes + 564  (see config.RAW_TAIL_BYTES)
+Geometry varies per preset (e.g. CEUS014 C3_large: RF 192 lines x 1920 samples int16, 42 frames;
+ENV 192 x 480 uint8). Read it from the sidecar, never hard-code it.
+
+Clarius ``*.raw`` layout (explains the old "+564 bytes" observation: 20 + 68*8 = 564, 20 + 42*8 = 356):
+  * header: 5 x int32 = (id, frames, lines, samples, sample_size)          -> 20 bytes
+  * then per frame: int64 timestamp, followed by lines*samples*sample_size data bytes
+Reading the file as one flat block (ignoring the header and per-frame timestamps) shifts frame k by
+(20 + 8k) bytes, i.e. a growing depth offset — :func:`read_raw` parses the layout properly.
 """
 
 from __future__ import annotations
 
 import re
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -88,20 +93,59 @@ def parse_rawdata_yml(path: str | Path) -> RawGeometry:
     )
 
 
+CLARIUS_HEADER_BYTES = 20  # 5 x int32
+CLARIUS_TIMESTAMP_BYTES = 8  # int64 per frame
+
+
+def read_clarius_raw(raw_path: str | Path) -> tuple[dict, np.ndarray, np.ndarray]:
+    """Parse a Clarius ``*.raw`` file -> ``(header, timestamps (frames,), data (frames, lines, samples))``.
+
+    Raises ``ValueError`` if the file size does not match the Clarius layout.
+    """
+    buf = np.fromfile(str(raw_path), dtype=np.uint8)
+    if buf.size < CLARIUS_HEADER_BYTES:
+        raise ValueError(f"{raw_path}: too small for a Clarius header")
+    hid, frames, lines, samples, ssize = (int(v) for v in buf[:CLARIUS_HEADER_BYTES].view("<i4"))
+    if ssize not in (1, 2) or min(frames, lines, samples) <= 0:
+        raise ValueError(f"{raw_path}: implausible Clarius header {(hid, frames, lines, samples, ssize)}")
+    frame_bytes = lines * samples * ssize
+    expected = CLARIUS_HEADER_BYTES + frames * (CLARIUS_TIMESTAMP_BYTES + frame_bytes)
+    if buf.size != expected:
+        raise ValueError(f"{raw_path}: size {buf.size} != Clarius layout {expected}")
+    body = buf[CLARIUS_HEADER_BYTES:].reshape(frames, CLARIUS_TIMESTAMP_BYTES + frame_bytes)
+    timestamps = body[:, :CLARIUS_TIMESTAMP_BYTES].copy().view("<i8").ravel()
+    dtype = np.dtype("<i2") if ssize == 2 else np.dtype(np.uint8)
+    data = body[:, CLARIUS_TIMESTAMP_BYTES:].copy().view(dtype).reshape(frames, lines, samples)
+    header = {"id": hid, "frames": frames, "lines": lines, "samples": samples, "sample_size": ssize}
+    return header, timestamps, data
+
+
 def read_raw(
     raw_path: str | Path,
     geom: RawGeometry,
     *,
-    header_bytes: int = 0,
+    header_bytes: int | None = None,
     order: str = "lines_first",
 ) -> np.ndarray:
     """Read a raw file into ``(frames, lines, samples)``.
 
     Parameters
     ----------
-    header_bytes : bytes to skip at the start (use to test the 564-byte-header hypothesis).
+    header_bytes : ``None`` (default) parses the Clarius layout (header + per-frame timestamps), falling
+        back to a flat read if the file does not match it. An int forces the legacy flat read after
+        skipping that many bytes (kept only to reproduce the old exploration plots).
     order : "lines_first" -> each frame stored line-by-line (default, matches "samples per line").
     """
+    if header_bytes is None and order == "lines_first":
+        try:
+            _, _, data = read_clarius_raw(raw_path)
+            if data.shape[1:] == (geom.number_of_lines, geom.samples_per_line):
+                return data
+            reason = f"header shape {data.shape[1:]} != yml geometry"
+        except ValueError as e:
+            reason = str(e)
+        warnings.warn(f"{raw_path}: not parsed as Clarius layout ({reason}); flat read may be offset",
+                      stacklevel=2)
     buf = np.fromfile(str(raw_path), dtype=np.uint8)
     if header_bytes:
         buf = buf[header_bytes:]
@@ -117,5 +161,9 @@ def read_raw(
 
 
 def load_npy_rf(npy_path: str | Path) -> np.ndarray:
-    """Load a ``*_rf_no_tgc.npy`` array (memory-mapped). Observed shape (lines, samples, frames)."""
+    """Load a ``*_rf_no_tgc.npy`` array (memory-mapped). Observed shape (lines, samples, frames).
+
+    These come from the QuantUS Clarius parser: RF lines zero-padded at the END to 2928 samples
+    (C3/L15), so only the first ``samples_per_line`` samples carry signal.
+    """
     return np.load(str(npy_path), mmap_mode="r")
