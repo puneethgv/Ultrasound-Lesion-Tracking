@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import glob
 import warnings
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -22,6 +23,7 @@ import pandas as pd
 from usloc import config as C
 from usloc.data.cohort import build_cohort
 from usloc.labels import load_boxes, load_rf_case
+from usloc.labels.register import DEFAULT_SCAN
 
 warnings.simplefilter("ignore")
 
@@ -87,10 +89,19 @@ def main() -> None:
             rec[f"{kind}_box"] = f"L{b[0]:.0f}-{b[2]:.0f} S{b[1]:.0f}-{b[3]:.0f}"
             rec[f"iou_{kind}"] = round(_iou(sbox, b), 3)
             rec[f"{kind}_inside_spline"] = round(_frac_inside(b, sbox), 3)
-        ref = boxes.get("large") or boxes.get("small")
-        rec["flag"] = ref is None or rec.get("iou_large", rec.get("iou_small", 0.0)) < args.min_iou
+        # GUI boxes were annotated on raw_0_0; a spline on another acquisition is not comparable
+        if not boxes:
+            rec["flag"], rec["flag_reason"] = True, "no GUI box"
+        elif Path(rc.spline.scan_name).stem != DEFAULT_SCAN:
+            rec["flag"], rec["flag_reason"] = True, f"spline on {rc.spline.scan_name}, boxes on {DEFAULT_SCAN}"
+        elif rec.get("iou_large", rec.get("iou_small", 0.0)) < args.min_iou:
+            rec["flag"], rec["flag_reason"] = True, f"IoU < {args.min_iou}"
+        else:
+            rec["flag"], rec["flag_reason"] = False, ""
         rows.append(rec)
-        keep[case] = (rc, boxes)
+        if len(keep) < args.gallery:  # keep only what the gallery draws (full RF cines are large)
+            fr = int(np.clip(rc.spline.frame, 0, rc.n_frames - 1))
+            keep[case] = (rc.frame_image(fr), rc.mask, rc.grid.forward, boxes, fr)
 
     df = pd.DataFrame(rows)
     df.to_csv(out_dir / "alignment_report.csv", index=False)
@@ -100,16 +111,18 @@ def main() -> None:
         for col in ("iou_large", "large_inside_spline", "iou_small", "small_inside_spline"):
             if col in ok:
                 print(f"  {col:22s} median={ok[col].median():.3f}  min={ok[col].min():.3f}")
-        print(f"  flagged (IoU < {args.min_iou} or no box): {int(ok['flag'].sum())}")
-        print(ok[ok["flag"]][["case", "spline_lines", "spline_samples"]
-                             + [c for c in ("large_box", "iou_large") if c in ok]].to_string(index=False))
+        flagged = ok[ok["flag"].astype(bool)]
+        print(f"  flagged for review: {len(flagged)}")
+        if len(flagged):
+            cols = ["case", "flag_reason", "spline_lines", "spline_samples"]
+            print(flagged[cols + [c for c in ("large_box", "iou_large") if c in ok]].to_string(index=False))
     print("report ->", out_dir / "alignment_report.csv")
 
-    if args.gallery and keep:
-        _gallery(keep, args.gallery, out_dir / "alignment_gallery.png")
+    if keep:
+        _gallery(keep, out_dir / "alignment_gallery.png")
 
 
-def _gallery(keep: dict, n: int, path) -> None:
+def _gallery(keep: dict, path) -> None:
     import matplotlib
 
     matplotlib.use("Agg")
@@ -117,22 +130,21 @@ def _gallery(keep: dict, n: int, path) -> None:
 
     from usloc.viz import overlay_mask
 
-    cases = list(keep)[:n]
+    cases = list(keep)
     ncol = 4
     nrow = int(np.ceil(len(cases) / ncol))
     fig, ax = plt.subplots(nrow, ncol, figsize=(4.2 * ncol, 3.4 * nrow), squeeze=False)
     for a in ax.ravel():
         a.axis("off")
     for a, case in zip(ax.ravel(), cases, strict=False):
-        rc, boxes = keep[case]
-        fr = int(np.clip(rc.spline.frame, 0, rc.n_frames - 1))
-        a.imshow(overlay_mask(rc.frame_image(fr), rc.mask, (255, 0, 200), 0.4))
+        image, mask, forward, boxes, fr = keep[case]
+        a.imshow(overlay_mask(image, mask, (255, 0, 200), 0.4))
         for kind, color in (("large", "#ff3d00"), ("small", "#00e5ff")):
             if kind in boxes:
                 l0, s0, l1, s1 = boxes[kind]
                 ls = np.r_[np.linspace(l0, l1, 20), np.full(20, l1), np.linspace(l1, l0, 20), np.full(20, l0)]
                 ss = np.r_[np.full(20, s0), np.linspace(s0, s1, 20), np.full(20, s1), np.linspace(s1, s0, 20)]
-                x, y = rc.grid.forward(ls, ss)
+                x, y = forward(ls, ss)
                 a.plot(x, y, "-", color=color, lw=1.0)
         a.set_title(f"{case}  frame {fr}", fontsize=8)
     fig.suptitle("Spline mask (magenta, QuantUS-inverted) vs GUI boxes (red large / cyan small) on RF fan",

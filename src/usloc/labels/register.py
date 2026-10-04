@@ -124,7 +124,7 @@ def load_rf_case(case: str, *, out_h: int = RF_OUT_H) -> RfCase | None:
     """Load the spline's RF acquisition and map the spline into the canonical fan image."""
     spline_path = C.FLL_ROI_DIR / f"{case}_roi.pkl"
     sp = load_spline(spline_path) if spline_path.exists() else None
-    scan = (sp.scan_name or DEFAULT_SCAN) if sp is not None else DEFAULT_SCAN
+    scan = Path(sp.scan_name).stem if sp is not None and sp.scan_name else DEFAULT_SCAN
     roles = find_rf_acquisition(case, scan)
     if roles is None:
         return None
