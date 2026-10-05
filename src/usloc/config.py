@@ -37,10 +37,10 @@ MALIGNANT = ("metastasis",)
 SITE_TRAIN = "Dresden"
 SITE_TEST = "Halle"
 
-# --- Raw-file quirk ---------------------------------------------------------
-# Every Clarius-style *.raw file on this dataset has filesize == frames*lines*samples*bytes + 564.
-# Whether those 564 bytes are a leading header or a trailing footer is validated empirically in the
-# exploration notebook (Phase 2/3); this constant documents the observation.
+# --- Raw-file layout --------------------------------------------------------
+# Clarius *.raw = 20-byte header + per frame (8-byte timestamp + data), so the overhead is
+# 20 + 8*frames bytes (564 for 68 frames, 356 for 42) — parsed by io.rawdata.read_clarius_raw.
+# Kept only so the legacy exploration notebook cell still runs.
 RAW_TAIL_BYTES = 564
 
 # --- Derived outputs (gitignored) -------------------------------------------

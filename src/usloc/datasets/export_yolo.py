@@ -9,7 +9,8 @@ Modes:
   * ``class_agnostic`` — collapse all classes to a single ``lesion`` class (localization-only detector).
 
 Label format (one line per lesion): ``<class_id> x1 y1 x2 y2 … xn yn`` with polygon points normalized
-to [0, 1] by the image width/height. Images are the de-identified canonical crop. Frames of a patient
+to [0, 1] by the image width/height. Images are the canonical ``register_case`` space (``source='rf'``:
+RF fan with QuantUS-aligned masks). Frames of a patient
 never cross splits (splits are assigned per case).
 """
 
@@ -51,13 +52,14 @@ def _assign_splits(cohort, val_frac: float, seed: int) -> dict[str, str]:
     return splits
 
 
-def _case_items(case, space, multiframe, corr_thresh, max_frames):
+def _case_items(case, space, multiframe, corr_thresh, max_frames, source="rf"):
     """Yield (name, image, polygon, mask) tuples for a case (one for single-frame, many for multi)."""
     if multiframe:
-        for s in iter_case_frames(case, corr_thresh=corr_thresh, max_frames=max_frames, space=space):
+        for s in iter_case_frames(case, corr_thresh=corr_thresh, max_frames=max_frames, space=space,
+                                  source=source):
             yield f"{case}_f{s.frame:03d}", s.image, s.polygon, s.mask
     else:
-        s = register_case(case, space=space)
+        s = register_case(case, source=source, space=space)
         if s is not None and s.bbox is not None and s.polygon is not None:
             yield case, s.image, s.polygon, s.mask
 
@@ -73,6 +75,7 @@ def export_yolo_seg(
     class_agnostic: bool = False,
     corr_thresh: float = 0.85,
     max_frames: int = 40,
+    source: str = "rf",
 ) -> dict:
     """Write the dataset under ``out_dir`` (default ``DERIVED/yolo_seg``) and return a summary."""
     import cv2
@@ -97,7 +100,7 @@ def export_yolo_seg(
             continue
         class_id = 0 if class_agnostic else int(row["class_id"])
         wrote = 0
-        for name, image, polygon, mask in _case_items(case, space, multiframe, corr_thresh, max_frames):
+        for name, image, polygon, mask in _case_items(case, space, multiframe, corr_thresh, max_frames, source):
             if int(mask.sum()) < min_mask_area:
                 continue
             img = (np.clip(image, 0, 1) * 255).astype(np.uint8)
@@ -121,6 +124,7 @@ def export_yolo_seg(
 
     return {
         "out_dir": str(out_dir),
+        "source": source,
         "multiframe": multiframe,
         "class_agnostic": class_agnostic,
         "images": img_counts,

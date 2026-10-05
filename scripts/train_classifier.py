@@ -22,12 +22,13 @@ def main() -> None:
     ap.add_argument("--imgsz", type=int, default=224)
     ap.add_argument("--batch", type=int, default=64)
     ap.add_argument("--max-frames", type=int, default=40)
+    ap.add_argument("--source", default="rf", choices=["rf", "dicom"])
     ap.add_argument("--skip-export", action="store_true")
     args = ap.parse_args()
 
     out = C.DERIVED / "crops" / args.task
     if not args.skip_export:
-        summary = export_crops(out, task=args.task, max_frames=args.max_frames)
+        summary = export_crops(out, task=args.task, max_frames=args.max_frames, source=args.source)
         print(json.dumps(summary, indent=2))
 
     _, results = train_classifier(out, epochs=args.epochs, imgsz=args.imgsz, batch=args.batch)
