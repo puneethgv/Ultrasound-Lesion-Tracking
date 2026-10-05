@@ -106,6 +106,100 @@ cells.append(md(
     "(`read_clarius_raw`); the old flat read shifted frame *k* by 10 + 4k samples."
 ))
 
+cells.append(md(
+    "## Aligned vs mis-aligned — full-cohort review galleries\n"
+    "\n"
+    "Every spline case is scored by the **IoU between the QuantUS-inverted spline and the independent "
+    "GUI box** (both in the RF grid) and sorted into tiers. In each panel the **mask is magenta** and "
+    "the GUI boxes are **red (large) / cyan (small)** on the canonical RF fan — so a clinician can see "
+    "directly whether the mask sits on the lesion the box marks. **Green titles = aligned, red/amber = "
+    "needs review.**\n"
+    "\n"
+    "- ✅ **Aligned, high confidence** — IoU ≥ 0.5\n"
+    "- ✅ **Aligned, acceptable** — 0.3 ≤ IoU < 0.5\n"
+    "- ⚠️ **Flagged, low IoU** (< 0.3, same acquisition) — mask may be misplaced, **or** box & spline "
+    "mark *different* lesions (common in multifocal metastasis)\n"
+    "- ⚠️ **Different acquisition** — spline's `Scan Name` ≠ `raw_0_0`, so the box is not comparable "
+    "(boxes omitted; judge the mask alone)\n"
+    "- ⚠️ **No RF** — spline exists but no `raw_*` acquisition found (drops out of the RF pipeline)"
+))
+cells.append(code(
+    "import pandas as pd\n"
+    "from pathlib import Path\n"
+    "from usloc.data.cohort import build_cohort\n"
+    "from usloc.labels.register import DEFAULT_SCAN\n"
+    "\n"
+    "def boxes_rf(case):\n"
+    "    out = {}\n"
+    "    for b in load_boxes(glob.glob(str(C.GUI_ROOT/'gui_*'/f'{case}.xlsx'))[0]):\n"
+    "        if None in (b.h1, b.h2, b.v1, b.v2): continue\n"
+    "        h0,v0,h1,v1 = b.xyxy; out.setdefault(b.roi_kind, (v0,h0,v1,h1))  # (line0,sample0,line1,sample1)\n"
+    "    return out\n"
+    "def _iou(a, b):\n"
+    "    ix = max(0., min(a[2],b[2]) - max(a[0],b[0])); iy = max(0., min(a[3],b[3]) - max(a[1],b[1]))\n"
+    "    it = ix*iy; u = (a[2]-a[0])*(a[3]-a[1]) + (b[2]-b[0])*(b[3]-b[1]) - it\n"
+    "    return it/u if u > 0 else 0.\n"
+    "\n"
+    "# score + cache a render frame for every spline case (loads RF cines — takes a few minutes)\n"
+    "cache, rows = {}, []\n"
+    "for _, row in build_cohort().query('has_spline').iterrows():\n"
+    "    case = row['case']\n"
+    "    try: rc = load_rf_case(case)\n"
+    "    except Exception: rc = None\n"
+    "    if rc is None or rc.prescan_polygon is None:\n"
+    "        rows.append((case, row['class'], row['site'], 'no_rf', float('nan'))); continue\n"
+    "    bx = boxes_rf(case); pl = rc.prescan_polygon\n"
+    "    sb = (pl[:,0].min(), pl[:,1].min(), pl[:,0].max(), pl[:,1].max())\n"
+    "    ref = bx.get('large', bx.get('small')); iou = _iou(sb, ref) if ref else float('nan')\n"
+    "    if not bx: cat = 'no_box'\n"
+    "    elif Path(rc.spline.scan_name).stem != DEFAULT_SCAN: cat = 'diff_acq'\n"
+    "    elif iou >= 0.5: cat = 'aligned_high'\n"
+    "    elif iou >= 0.3: cat = 'aligned_ok'\n"
+    "    else: cat = 'flagged_low'\n"
+    "    rows.append((case, row['class'], row['site'], cat, iou))\n"
+    "    fr = int(np.clip(rc.spline.frame, 0, rc.n_frames-1))\n"
+    "    cache[case] = (rc.frame_image(fr), rc.mask, rc.grid.forward, bx, iou, fr, rc.spline.scan_name)\n"
+    "status = pd.DataFrame(rows, columns=['case','class','site','category','iou'])\n"
+    "print(status['category'].value_counts().to_string())\n"
+    "print('\\naligned (IoU>=0.3):', int(status.category.isin(['aligned_high','aligned_ok']).sum()),\n"
+    "      '/ ', len(status), 'spline cases')\n"
+))
+cells.append(code(
+    "def render_group(cases, title, show_boxes=True, color='black', ncol=5):\n"
+    "    if not cases:\n"
+    "        print('(none)'); return\n"
+    "    nrow = int(np.ceil(len(cases)/ncol))\n"
+    "    fig, ax = plt.subplots(nrow, ncol, figsize=(3.4*ncol, 3.0*nrow), squeeze=False)\n"
+    "    for a in ax.ravel(): a.axis('off')\n"
+    "    for a, case in zip(ax.ravel(), cases):\n"
+    "        image, mask, forward, bx, iou, fr, scan = cache[case]\n"
+    "        a.imshow(overlay_mask(image, mask, (255,0,200), 0.4)); a.axis('off')\n"
+    "        if show_boxes:\n"
+    "            for kind, c in (('large','#ff3d00'), ('small','#00e5ff')):\n"
+    "                if kind in bx:\n"
+    "                    l0,s0,l1,s1 = bx[kind]\n"
+    "                    ls = np.r_[np.linspace(l0,l1,20), np.full(20,l1), np.linspace(l1,l0,20), np.full(20,l0)]\n"
+    "                    ss = np.r_[np.full(20,s0), np.linspace(s0,s1,20), np.full(20,s1), np.linspace(s1,s0,20)]\n"
+    "                    x,y = forward(ls, ss); a.plot(x, y, '-', color=c, lw=1.0)\n"
+    "        tt = case + (f'  IoU={iou:.2f}' if iou == iou else '')\n"
+    "        if not show_boxes: tt += f'  [{scan}]'\n"
+    "        a.set_title(tt, fontsize=8, color=color)\n"
+    "    fig.suptitle(title, fontweight='bold'); plt.tight_layout(); plt.show()\n"
+    "\n"
+    "def grp(cat, asc=False):\n"
+    "    return list(status[status.category == cat].sort_values('iou', ascending=asc)['case'])\n"
+))
+cells.append(md("### ✅ Aligned — high confidence (IoU ≥ 0.5)"))
+cells.append(code("render_group(grp('aligned_high'), 'ALIGNED — high confidence (IoU >= 0.5)', color='#1a7f37')"))
+cells.append(md("### ✅ Aligned — acceptable (0.3 ≤ IoU < 0.5)"))
+cells.append(code("render_group(grp('aligned_ok'), 'ALIGNED — acceptable (0.3 <= IoU < 0.5)', color='#1a7f37')"))
+cells.append(md("### ⚠️ Flagged — low IoU (< 0.3), same acquisition — **please review**"))
+cells.append(code("render_group(grp('flagged_low', asc=True), 'FLAGGED — low IoU (mask may be wrong, or a different lesion)', color='#d1242f')"))
+cells.append(md("### ⚠️ Flagged — spline on a different acquisition than the boxes (box not comparable)"))
+cells.append(code("render_group(grp('diff_acq'), 'FLAGGED — different acquisition than the GUI boxes', show_boxes=False, color='#bf8700')"))
+cells.append(md("### ⚠️ No RF acquisition found (excluded from the RF pipeline)"))
+cells.append(code("print('\\n'.join(status[status.category=='no_rf']['case']) or '(none)')"))
+
 nb = nbf.v4.new_notebook(cells=cells)
 nb.metadata["kernelspec"] = {"display_name": "Python (usloc)", "language": "python", "name": "usloc"}
 nb.metadata["language_info"] = {"name": "python"}
