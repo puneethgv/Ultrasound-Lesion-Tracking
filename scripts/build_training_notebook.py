@@ -148,6 +148,56 @@ cells.append(md(
     "(0.90 Dresden / 0.65 Halle) and pairs with this as a two-stage system."
 ))
 
+cells.append(md(
+    "# New Experiment 1 — corrected masks (QuantUS → RF alignment)\n"
+    "\n"
+    "The masks in *Method 1* above were placed with the **old DICOM mapping**, which turned out to be "
+    "wrong: the `FLL_ROI` splines are **QuantUS ROI exports** drawn in QuantUS's *RF* scan-conversion "
+    "space, not DICOM pixels (full proof in `03_mask_alignment_check.ipynb`). Here we re-export every "
+    "case with `register_case(source='rf')` — the B-mode reconstructed from the RF frame carrying the "
+    "QuantUS-aligned mask — and retrain the **same** nnU-Net (2D, fold 0, 100 epochs, same split).\n"
+    "\n"
+    "**Result (identical protocol, only the masks changed):**\n"
+    "\n"
+    "| Metric | Old (misaligned, DICOM) | New (corrected RF) |\n"
+    "|---|---|---|\n"
+    "| Dresden val mean Dice | 0.052 | **0.352** |\n"
+    "| Peak EMA pseudo-Dice | 0.16 | **0.37** |\n"
+    "| Overfitting | yes (val collapsed) | **no** |\n"
+    "| Halle external mean Dice | 0.077 | **0.265** |\n"
+    "| Halle detection (Dice>0.1) | 17% | **44%** |\n"
+    "| Halle detection (Dice>0.3) | 11% | **36%** |\n"
+    "\n"
+    "Fixing the registration ~doubled internal Dice (and removed the overfitting collapse) and roughly "
+    "tripled the external detection rate — the alignment was the dominant bottleneck."
+))
+cells.append(code(
+    "# New Experiment 1 reads the RF-aligned dataset (Dataset002_LesionRF) and its fold-0 predictions\n"
+    "RAW = NN/'raw'/'Dataset002_LesionRF'\n"
+    "split2 = json.load(open(NN/'preprocessed'/'Dataset002_LesionRF'/'splits_final.json'))[0]\n"
+    "ex1_train, ex1_val = split2['train'], split2['val']\n"
+    "test_cases = sorted(p.name[:-9] for p in (RAW/'imagesTs').glob('*_0000.png'))\n"
+    "print(f'RF-aligned dataset  train={len(ex1_train)}  val={len(ex1_val)}  Halle test={len(test_cases)}')\n"
+))
+cells.append(md(
+    "### The data going into the model (RF fan image + QuantUS-aligned mask)\n"
+    "Exactly what nnU-Net now sees: the B-mode reconstructed from RF, with the corrected lesion mask "
+    "(cyan) + derived box (yellow), kept strictly separate between train and val patients."
+))
+cells.append(code(
+    "show_gt_grid(ex1_train, 'imagesTr', 'labelsTr', 'NEW EXP 1 — TRAIN data (RF-aligned mask, model input)', n=5)\n"
+    "show_gt_grid(ex1_val,  'imagesTr', 'labelsTr', 'NEW EXP 1 — VAL data (RF-aligned mask, held out)', n=5)\n"
+))
+cells.append(md(
+    "### Straight out of the model — predictions (corrected masks)\n"
+    "Input · ground truth (cyan) · prediction (magenta), per-case Dice shown. Dresden val, then the "
+    "locked Halle external test."
+))
+cells.append(code(
+    "show_pred_grid(ex1_val, 'imagesTr', 'labelsTr', 'pred_val_rf', 'NEW EXP 1 — Dresden VAL: GT vs nnU-Net prediction', n=5)\n"
+    "show_pred_grid(test_cases, 'imagesTs', 'labelsTs', 'pred_halle_rf', 'NEW EXP 1 — Halle EXTERNAL: GT vs nnU-Net prediction', n=5)\n"
+))
+
 nb = nbf.v4.new_notebook(cells=cells)
 nb.metadata["kernelspec"] = {"display_name": "Python (usloc)", "language": "python", "name": "usloc"}
 nb.metadata["language_info"] = {"name": "python"}
