@@ -116,3 +116,32 @@ def build_cohort(gui_root: str | Path | None = None) -> pd.DataFrame:
     cohort["excluded"] = cohort.get("excluded", False).fillna(False)
     # guarantee one row per case even if a spreadsheet had duplicate keys
     return cohort.drop_duplicates("case", keep="first").reset_index(drop=True)
+
+
+def read_case_list(path: str | Path) -> list[str]:
+    """Case IDs from a text file (one per line, ``#`` starts a comment) or from a CSV with a ``case``
+    column. If the CSV also has a ``flag`` column (``alignment_report.csv``), only flagged rows count."""
+    path = Path(path)
+    if path.suffix.lower() == ".csv":
+        df = pd.read_csv(path)
+        if "case" not in df.columns:
+            raise ValueError(f"{path} has no 'case' column")
+        if "flag" in df.columns:
+            df = df[df["flag"].fillna(False).astype(str).str.lower().isin(("true", "1"))]
+        cases = df["case"].astype(str).str.strip()
+    else:
+        lines = (ln.split("#", 1)[0].strip() for ln in path.read_text(encoding="utf-8").splitlines())
+        cases = pd.Series([ln for ln in lines if ln], dtype=str)
+    return list(dict.fromkeys(c for c in cases if c))
+
+
+def drop_training_cases(cohort: pd.DataFrame, exclude, *, also_test: bool = False) -> pd.DataFrame:
+    """Remove the cases in ``exclude`` from the training site. The external test site is left
+    complete unless ``also_test``, so runs with and without those cases are scored on the same set."""
+    exclude = set(exclude or ())
+    if not exclude:
+        return cohort
+    drop = cohort["case"].isin(exclude)
+    if not also_test:
+        drop &= cohort["site"] == C.SITE_TRAIN
+    return cohort[~drop]

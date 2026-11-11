@@ -17,12 +17,13 @@ never cross splits (splits are assigned per case).
 from __future__ import annotations
 
 import random
+from collections.abc import Iterable
 from pathlib import Path
 
 import numpy as np
 
 from .. import config as C
-from ..data.cohort import build_cohort
+from ..data.cohort import build_cohort, drop_training_cases
 from ..data.multiframe import iter_case_frames
 from ..labels import register_case
 
@@ -76,8 +77,12 @@ def export_yolo_seg(
     corr_thresh: float = 0.85,
     max_frames: int = 40,
     source: str = "rf",
+    exclude: Iterable[str] = (),
 ) -> dict:
-    """Write the dataset under ``out_dir`` (default ``DERIVED/yolo_seg``) and return a summary."""
+    """Write the dataset under ``out_dir`` (default ``DERIVED/yolo_seg``) and return a summary.
+
+    ``exclude``: cases to leave out of train/val (the Halle test set is never reduced).
+    """
     import cv2
 
     out_dir = Path(out_dir or (C.DERIVED / "yolo_seg"))
@@ -88,7 +93,8 @@ def export_yolo_seg(
     names = ["lesion"] if class_agnostic else list(C.CLASSES)
     cohort = build_cohort()
     df = cohort[cohort.has_spline & (~cohort.excluded.astype(bool))]
-    splits = _assign_splits(df, val_frac, seed)
+    splits = _assign_splits(df, val_frac, seed)  # split first: leaving cases out must not reshuffle it
+    df = drop_training_cases(df, exclude)
 
     img_counts = {s: 0 for s in ("train", "val", "test")}
     case_counts = {s: 0 for s in ("train", "val", "test")}

@@ -14,12 +14,13 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Iterable
 from pathlib import Path
 
 import numpy as np
 
 from .. import config as C
-from ..data.cohort import build_cohort
+from ..data.cohort import build_cohort, drop_training_cases
 from ..labels import register_case
 
 
@@ -31,7 +32,14 @@ def export_nnunet(
     source: str = "rf",
     include_test: bool = True,
     raw_root: str | Path | None = None,
+    exclude: Iterable[str] = (),
 ) -> dict:
+    """Write the dataset and return a summary.
+
+    ``exclude``: cases to leave out of training (Dresden). The Halle test set is never reduced, so a
+    run with and a run without those cases are scored on the same test cases. Use a new
+    ``dataset_id`` / ``name`` for such a run: files of an earlier export are not deleted.
+    """
     import cv2
 
     raw_root = Path(raw_root or os.environ["nnUNet_raw"])
@@ -41,6 +49,8 @@ def export_nnunet(
 
     cohort = build_cohort()
     df = cohort[cohort.has_spline & (~cohort.excluded.astype(bool))]
+    n_before = len(df)
+    df = drop_training_cases(df, exclude)
     n_tr, n_ts, skipped = 0, 0, []
     for _, row in df.iterrows():
         s = register_case(row["case"], source=source, space=space)
@@ -66,4 +76,5 @@ def export_nnunet(
         "file_ending": ".png",
     }
     (root / "dataset.json").write_text(json.dumps(dataset_json, indent=2))
-    return {"root": str(root), "numTraining": n_tr, "numTest": n_ts, "skipped": skipped}
+    return {"root": str(root), "numTraining": n_tr, "numTest": n_ts, "skipped": skipped,
+            "excluded": n_before - len(df)}
