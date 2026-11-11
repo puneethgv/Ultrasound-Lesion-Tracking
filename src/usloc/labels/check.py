@@ -92,7 +92,12 @@ def score_case(case: str, *, min_iou: float = 0.3, track: bool = True) -> tuple[
         spline_on_picture=True if qg is None else qg.contains(sp.x, sp.y),
     )
 
-    boxes, n_rows = gui_boxes(case, scan)
+    reasons: list[str] = []
+    try:
+        boxes, n_rows = gui_boxes(case, scan)
+    except Exception as e:  # noqa: BLE001 - one unreadable box file must not stop the run
+        boxes, n_rows = {}, 0
+        reasons.append(f"GUI box file not readable ({type(e).__name__}: {e})")
     rec["n_box_rows"] = n_rows
     scored: dict[str, tuple[Box, Agreement]] = {}
     for kind, b in boxes.items():
@@ -104,10 +109,10 @@ def score_case(case: str, *, min_iou: float = 0.3, track: bool = True) -> tuple[
         rec[f"{kind}_inside_spline"] = round(a.box_in_spline, 3)
         rec[f"spline_inside_{kind}"] = round(a.spline_in_box, 3)
 
-    reasons: list[str] = []
     kind = "large" if "large" in scored else next(iter(scored), None)
     if kind is None:
-        reasons.append("no GUI box")
+        if not reasons:
+            reasons.append("no GUI box")
     else:
         gb, a = scored[kind]
         b = boxes[kind]
@@ -136,10 +141,15 @@ def score_case(case: str, *, min_iou: float = 0.3, track: bool = True) -> tuple[
                     cache[k] = rf_to_bmode(rc.rf[k].astype(np.float32), axis=1)
                 return cache[k]
 
-            dl, ds, conf = track_box(frame_at, gb, f_box, f_mask)
-            tracked = compare(sbox, shift_box(gb, dl, ds), min_iou=min_iou)
-            rec.update(track_d_line=round(dl, 1), track_d_sample=round(ds, 1), track_conf=round(conf, 2),
-                       iou_tracked=round(tracked.iou, 3), relation_tracked=tracked.relation)
+            try:
+                dl, ds, conf = track_box(frame_at, gb, f_box, f_mask)
+            except Exception:  # noqa: BLE001 - the motion estimate is a hint; go on without it
+                pass
+            else:
+                tracked = compare(sbox, shift_box(gb, dl, ds), min_iou=min_iou)
+                rec.update(track_d_line=round(dl, 1), track_d_sample=round(ds, 1),
+                           track_conf=round(conf, 2), iou_tracked=round(tracked.iou, 3),
+                           relation_tracked=tracked.relation)
 
         if low:
             reasons.append(f"IoU < {min_iou:g}: {RELATION_TEXT[a.relation]}")

@@ -117,6 +117,24 @@ def test_box_row_for_the_masks_recording_is_preferred(tmp_path, monkeypatch):
     assert gui_boxes("NOPE001") == ({}, 0)
 
 
+def test_unreadable_box_file_and_failed_tracking_do_not_stop_the_run(tmp_path, monkeypatch):
+    syn.use(tmp_path, monkeypatch)
+    syn.add_case(tmp_path, "SYN010")
+    (tmp_path / "gui" / "gui_metastasis" / "SYN010.xlsx").write_bytes(b"not a spreadsheet")
+    rec, _ = score_case("SYN010")
+    assert rec["status"] == "ok" and rec["flag"] and "not readable" in rec["flag_reason"]
+
+    syn.add_case(tmp_path, "SYN011", n_frames=12, velocity=(1, 15), box_frame=0, roi_frame=10)
+    import usloc.labels.check as check
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(check, "track_box", broken)
+    rec, _ = score_case("SYN011")
+    assert rec["status"] == "ok" and rec["flag"] and "iou_tracked" not in rec
+
+
 def test_cohort_counts_a_case_with_only_a_redrawn_roi(tmp_path, monkeypatch):
     syn.use(tmp_path, monkeypatch)
     syn.add_case(tmp_path, "SYN009", with_roi=False)
