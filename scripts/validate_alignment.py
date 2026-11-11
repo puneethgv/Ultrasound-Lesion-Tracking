@@ -3,17 +3,23 @@
 The spline (QuantUS pixels) is mapped to the RF pre-scan grid with the inverse QuantUS warp
 (``usloc.labels.quantus``); the GUI boxes were annotated directly in that grid (h = sample, v = line).
 Two independent annotations of the same lesion should overlap there. Cases that do not are flagged
-for manual review.
+for manual review, together with what is known about why (``usloc.labels.check``):
+
+    relation         mask inside a larger box / covers a smaller box / shifted / apart
+    frame_gap        mask frame minus box frame (the liver moves between frames)
+    iou_tracked      IoU after carrying the box to the mask's frame with the tissue motion
+    iou_new_quantus  IoU if the ROI had been drawn on the picture of a newer QuantUS
 
 Usage:
     python scripts/validate_alignment.py                 # report -> $USLOC_DERIVED/alignment/
     python scripts/validate_alignment.py --gallery 24    # + overlay gallery of 24 cases
+    python scripts/validate_alignment.py --review        # + one two-frame picture per flagged case
+    python scripts/validate_alignment.py --cases UKDCEUS056 UKDCEUS057
 """
 
 from __future__ import annotations
 
 import argparse
-import glob
 import warnings
 from pathlib import Path
 
@@ -22,104 +28,153 @@ import pandas as pd
 
 from usloc import config as C
 from usloc.data.cohort import build_cohort
-from usloc.labels import load_boxes, load_rf_case
-from usloc.labels.register import DEFAULT_SCAN
+from usloc.labels.agreement import RELATION_TEXT, RELATIONS, shift_box
+from usloc.labels.check import as_box, gui_boxes, score_case
 
 warnings.simplefilter("ignore")
 
-
-def _iou(a, b) -> float:
-    ix = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
-    iy = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
-    inter = ix * iy
-    union = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
-    return float(inter / union) if union > 0 else 0.0
-
-
-def _frac_inside(box, ref) -> float:
-    """Fraction of ``box`` area lying inside ``ref``."""
-    ix = max(0.0, min(box[2], ref[2]) - max(box[0], ref[0]))
-    iy = max(0.0, min(box[3], ref[3]) - max(box[1], ref[1]))
-    area = (box[2] - box[0]) * (box[3] - box[1])
-    return float(ix * iy / area) if area > 0 else 0.0
-
-
-def _gui_boxes(case: str) -> dict:
-    paths = glob.glob(str(C.GUI_ROOT / "gui_*" / f"{case}.xlsx"))
-    if not paths:
-        return {}
-    out = {}
-    for b in load_boxes(paths[0]):
-        if None in (b.h1, b.h2, b.v1, b.v2):
-            continue
-        h0, v0, h1, v1 = b.xyxy               # h = sample, v = line
-        out.setdefault(b.roi_kind, (v0, h0, v1, h1))  # -> (line0, sample0, line1, sample1)
-    return out
+COLUMNS = [
+    "case", "class", "site", "status", "flag", "flag_reason", "relation",
+    "iou_large", "spline_inside_large", "large_inside_spline", "iou_small", "spline_inside_small",
+    "small_inside_spline", "d_line", "d_sample",
+    "frame", "box_frame", "frame_gap", "n_frames", "frame_in_range",
+    "iou_tracked", "relation_tracked", "track_d_line", "track_d_sample", "track_conf",
+    "iou_new_quantus", "spline_on_picture",
+    "roi_file", "scan", "box_kind", "box_sample_name", "box_device", "n_box_rows",
+    "spline_lines", "spline_samples", "large_box", "small_box",
+]
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--min-iou", type=float, default=0.3, help="flag if IoU(spline, large box) below this")
     ap.add_argument("--gallery", type=int, default=0, help="number of cases to plot (0 = none)")
+    ap.add_argument("--review", action="store_true",
+                    help="write one two-frame picture per flagged case to <out>/review/")
+    ap.add_argument("--no-track", action="store_true", help="skip the frame-to-frame motion estimate")
+    ap.add_argument("--cases", nargs="*", default=None, help="only these cases (default: all)")
+    ap.add_argument("--out", default=None, help="output folder (default: $USLOC_DERIVED/alignment)")
     args = ap.parse_args()
 
-    out_dir = C.DERIVED / "alignment"
+    out_dir = Path(args.out) if args.out else C.DERIVED / "alignment"
     out_dir.mkdir(parents=True, exist_ok=True)
     cohort = build_cohort()
     cases = cohort[cohort.has_spline]
+    if args.cases:
+        cases = cases[cases["case"].isin(args.cases)]
 
-    rows, keep = [], {}
+    rows, keep, n_review = [], {}, 0
     for _, row in cases.iterrows():
         case = row["case"]
-        rec = {"case": case, "class": row["class"], "site": row["site"]}
-        try:
-            rc = load_rf_case(case)
-        except Exception as e:  # noqa: BLE001 — report and continue
-            rows.append({**rec, "status": f"error: {type(e).__name__}: {e}"})
+        rec, rc = score_case(case, min_iou=args.min_iou, track=not args.no_track)
+        rows.append({"case": case, "class": row["class"], "site": row["site"], **rec})
+        if rc is None or rec.get("status") != "ok":
             continue
-        if rc is None or rc.prescan_polygon is None:
-            rows.append({**rec, "status": "no RF acquisition / spline"})
+        want_gallery = len(keep) < args.gallery
+        want_review = args.review and rec.get("flag") and "box_frame" in rec
+        if not (want_gallery or want_review):
             continue
-        ln, sm = rc.prescan_polygon[:, 0], rc.prescan_polygon[:, 1]
-        sbox = (ln.min(), sm.min(), ln.max(), sm.max())
-        rec.update(status="ok", scan=rc.spline.scan_name, frame=rc.spline.frame, n_frames=rc.n_frames,
-                   spline_lines=f"{sbox[0]:.0f}-{sbox[2]:.0f}", spline_samples=f"{sbox[1]:.0f}-{sbox[3]:.0f}")
-        boxes = _gui_boxes(case)
-        for kind, b in boxes.items():
-            rec[f"{kind}_box"] = f"L{b[0]:.0f}-{b[2]:.0f} S{b[1]:.0f}-{b[3]:.0f}"
-            rec[f"iou_{kind}"] = round(_iou(sbox, b), 3)
-            rec[f"{kind}_inside_spline"] = round(_frac_inside(b, sbox), 3)
-        # GUI boxes were annotated on raw_0_0; a spline on another acquisition is not comparable
-        if not boxes:
-            rec["flag"], rec["flag_reason"] = True, "no GUI box"
-        elif Path(rc.spline.scan_name).stem != DEFAULT_SCAN:
-            rec["flag"], rec["flag_reason"] = True, f"spline on {rc.spline.scan_name}, boxes on {DEFAULT_SCAN}"
-        elif rec.get("iou_large", rec.get("iou_small", 0.0)) < args.min_iou:
-            rec["flag"], rec["flag_reason"] = True, f"IoU < {args.min_iou}"
-        else:
-            rec["flag"], rec["flag_reason"] = False, ""
-        rows.append(rec)
-        if len(keep) < args.gallery:  # keep only what the gallery draws (full RF cines are large)
+        boxes = {k: as_box(b) for k, b in gui_boxes(case, Path(rc.spline.scan_name).stem)[0].items()}
+        if want_gallery:  # keep only what the gallery draws (full RF cines are large)
             fr = int(np.clip(rc.spline.frame, 0, rc.n_frames - 1))
             keep[case] = (rc.frame_image(fr), rc.mask, rc.grid.forward, boxes, fr)
+        if want_review:
+            (out_dir / "review").mkdir(exist_ok=True)
+            _review(case, rc, rec, boxes, out_dir / "review" / f"{case}.png")
+            n_review += 1
 
     df = pd.DataFrame(rows)
+    df = df[[c for c in COLUMNS if c in df] + [c for c in df if c not in COLUMNS]]
+    for col in ("frame", "box_frame", "frame_gap", "n_frames", "n_box_rows"):
+        if col in df:  # whole numbers, also when some cases have none
+            df[col] = df[col].astype("Int64")
     df.to_csv(out_dir / "alignment_report.csv", index=False)
-    ok = df[df.status == "ok"]
-    print(f"spline cases: {len(df)}   mapped: {len(ok)}   failed: {len(df) - len(ok)}")
-    if len(ok):
-        for col in ("iou_large", "large_inside_spline", "iou_small", "small_inside_spline"):
-            if col in ok:
-                print(f"  {col:22s} median={ok[col].median():.3f}  min={ok[col].min():.3f}")
-        flagged = ok[ok["flag"].astype(bool)]
-        print(f"  flagged for review: {len(flagged)}")
-        if len(flagged):
-            cols = ["case", "flag_reason", "spline_lines", "spline_samples"]
-            print(flagged[cols + [c for c in ("large_box", "iou_large") if c in ok]].to_string(index=False))
+    _summary(df, args.min_iou)
     print("report ->", out_dir / "alignment_report.csv")
-
+    if n_review:
+        print(f"review pictures ({n_review}) ->", out_dir / "review")
     if keep:
         _gallery(keep, out_dir / "alignment_gallery.png")
+
+
+def _summary(df: pd.DataFrame, min_iou: float) -> None:
+    ok = df[df.status == "ok"] if "status" in df else df.iloc[0:0]
+    print(f"spline cases: {len(df)}   scored: {len(ok)}   not scored: {len(df) - len(ok)}")
+    if "status" in df:
+        for _, r in df[df.status != "ok"].iterrows():
+            print(f"  {r['case']}: {r['status']}")
+    if not len(ok):
+        return
+    for col in ("iou_large", "large_inside_spline", "iou_small", "small_inside_spline"):
+        if col in ok:
+            print(f"  {col:22s} median={ok[col].median():.3f}  min={ok[col].min():.3f}")
+    if "relation" in ok:
+        print("  mask vs box:")
+        for rel in RELATIONS:
+            n = int((ok["relation"] == rel).sum())
+            if n:
+                print(f"    {rel:11s}{n:5d}   {RELATION_TEXT[rel]}")
+    flagged = ok[ok["flag"].astype(bool)]
+    print(f"  flagged for review: {len(flagged)}")
+    if not len(flagged):
+        return
+    if "iou_tracked" in flagged:
+        n = int((flagged["iou_tracked"] >= min_iou).sum())
+        print(f"    of these, the box agrees once it is carried to the mask's frame: {n}")
+    iou_col = "iou_large" if "iou_large" in flagged else "iou_small"
+    order = flagged.sort_values(iou_col) if iou_col in flagged else flagged
+    for _, r in order.iterrows():
+        iou = f"IoU {r[iou_col]:.2f}" if iou_col in r and pd.notna(r[iou_col]) else "IoU  n/a"
+        print(f"    {r['case']:16s}{iou}   {r['flag_reason']}")
+
+
+def _outline(forward, box, n: int = 20):
+    """Fan-image outline of a pre-scan box ``(line0, sample0, line1, sample1)``."""
+    l0, s0, l1, s1 = box
+    ls = np.r_[np.linspace(l0, l1, n), np.full(n, l1), np.linspace(l1, l0, n), np.full(n, l0)]
+    ss = np.r_[np.full(n, s0), np.linspace(s0, s1, n), np.full(n, s1), np.linspace(s1, s0, n)]
+    return forward(ls, ss)
+
+
+def _review(case: str, rc, rec: dict, boxes: dict, path) -> None:
+    """Left: the box on the frame it was drawn on. Right: the mask on its frame, with the box as drawn
+    (dashed) and, if the two frames differ, the box carried along with the tissue (yellow, dotted)."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    from usloc.viz import overlay_mask
+
+    f_mask = int(np.clip(rc.spline.frame, 0, rc.n_frames - 1))
+    f_box = int(np.clip(rec["box_frame"], 0, rc.n_frames - 1))
+    fig, ax = plt.subplots(1, 2, figsize=(11.5, 4.8))
+    ax[0].imshow(rc.frame_image(f_box), cmap="gray", vmin=0, vmax=1)
+    ax[1].imshow(overlay_mask(rc.frame_image(f_mask), rc.mask, (255, 0, 200), 0.4))
+    for kind, color in (("large", "#ff3d00"), ("small", "#00e5ff")):
+        if kind in boxes:
+            x, y = _outline(rc.grid.forward, boxes[kind])
+            ax[0].plot(x, y, "-", color=color, lw=1.2)
+            ax[1].plot(x, y, "--", color=color, lw=0.9)
+    if rc.polygon is not None:
+        ax[0].plot(np.r_[rc.polygon[:, 0], rc.polygon[0, 0]], np.r_[rc.polygon[:, 1], rc.polygon[0, 1]],
+                   "--", color="#ff00c8", lw=0.9)
+    if "track_d_line" in rec and rec.get("box_kind") in boxes:
+        moved = shift_box(boxes[rec["box_kind"]], rec["track_d_line"], rec["track_d_sample"])
+        x, y = _outline(rc.grid.forward, moved)
+        ax[1].plot(x, y, ":", color="#ffee00", lw=1.5)
+    ax[0].set_title(f"GUI box on its frame ({f_box}); mask outline dashed", fontsize=9)
+    ax[1].set_title(f"Mask on its frame ({f_mask}); box dashed, box moved with the tissue dotted", fontsize=9)
+    for a in ax:
+        a.set_xticks([])
+        a.set_yticks([])
+    head = f"{case}   IoU {rec.get('iou_large', rec.get('iou_small', float('nan'))):.2f}"
+    if "iou_tracked" in rec:
+        head += f"   after following the tissue {rec['iou_tracked']:.2f}"
+    fig.suptitle(f"{head}\n{rec.get('flag_reason', '')}", fontsize=9)
+    plt.tight_layout()
+    fig.savefig(path, dpi=110)
+    plt.close(fig)
 
 
 def _gallery(keep: dict, path) -> None:
@@ -141,10 +196,7 @@ def _gallery(keep: dict, path) -> None:
         a.imshow(overlay_mask(image, mask, (255, 0, 200), 0.4))
         for kind, color in (("large", "#ff3d00"), ("small", "#00e5ff")):
             if kind in boxes:
-                l0, s0, l1, s1 = boxes[kind]
-                ls = np.r_[np.linspace(l0, l1, 20), np.full(20, l1), np.linspace(l1, l0, 20), np.full(20, l0)]
-                ss = np.r_[np.full(20, s0), np.linspace(s0, s1, 20), np.full(20, s1), np.linspace(s1, s0, 20)]
-                x, y = forward(ls, ss)
+                x, y = _outline(forward, boxes[kind])
                 a.plot(x, y, "-", color=color, lw=1.0)
         a.set_title(f"{case}  frame {fr}", fontsize=8)
     fig.suptitle("Spline mask (magenta, QuantUS-inverted) vs GUI boxes (red large / cyan small) on RF fan",

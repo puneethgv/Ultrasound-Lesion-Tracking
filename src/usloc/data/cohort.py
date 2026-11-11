@@ -15,6 +15,7 @@ from pathlib import Path
 import pandas as pd
 
 from .. import config as C
+from ..labels.splines import find_spline_file
 
 
 def _clean_cases(paths: list[str]) -> list[str]:
@@ -85,7 +86,6 @@ def build_cohort(gui_root: str | Path | None = None) -> pd.DataFrame:
                     if case_raw.is_dir()
                     else []
                 )
-                spline = C.FLL_ROI_DIR / f"{case}_roi.pkl"
                 records.append(
                     {
                         "case": case,
@@ -96,7 +96,7 @@ def build_cohort(gui_root: str | Path | None = None) -> pd.DataFrame:
                         "n_tar": len(tars),
                         "has_raw_dir": case_raw.is_dir(),
                         "has_box": True,
-                        "has_spline": spline.exists(),
+                        "has_spline": find_spline_file(case) is not None,
                     }
                 )
     cohort = pd.DataFrame(records).drop_duplicates("case").reset_index(drop=True)
