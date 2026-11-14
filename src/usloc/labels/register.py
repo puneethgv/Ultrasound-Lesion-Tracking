@@ -28,13 +28,12 @@ from pathlib import Path
 
 import numpy as np
 
-from .. import config as C
 from ..data.discover import find_case_dir, list_dicoms, list_extracted
 from ..deid import Region, deidentify_frames, ultrasound_region
 from ..io import RawGeometry, parse_rawdata_yml, read_dicom, read_raw
 from ..recon import FanGrid, fan_grid, linear_grid, rf_to_bmode, sector_angle_rad, warp_to_fan
 from .quantus import spline_to_prescan
-from .splines import SplineLabel, load_spline, rasterize_spline
+from .splines import SplineLabel, find_spline_file, load_spline, rasterize_spline
 
 DEFAULT_SCAN = "raw_0_0"
 RF_OUT_H = 512  # height (px) of the canonical RF fan image
@@ -103,6 +102,22 @@ def find_rf_acquisition(case: str, scan_name: str = DEFAULT_SCAN) -> dict[str, P
     return None
 
 
+def explain_missing_rf(case: str, scan_name: str = DEFAULT_SCAN) -> str:
+    """Say why :func:`find_rf_acquisition` finds nothing for ``case`` (for reports)."""
+    case_dir = find_case_dir(case)
+    if case_dir is None:
+        return "no raw-data folder for this case"
+    sets = list_extracted(case_dir)
+    want = f"{scan_name}_extracted"
+    match = [e for e in sets if e.directory.name == want]
+    if not match:
+        have = ", ".join(e.directory.name for e in sets) or "none"
+        return f"no folder {want} (extracted folders: {have})"
+    files = sorted(p.name for p in match[0].directory.iterdir() if not p.name.startswith("._"))
+    shown = ", ".join(files[:8]) + (" ..." if len(files) > 8 else "")
+    return f"{want} has no *_rf.raw + *_rf.yml pair (files: {shown or 'none'})"
+
+
 def canonical_grid(geom: RawGeometry, out_h: int = RF_OUT_H) -> FanGrid:
     """Physical-ish display grid for an RF acquisition (fan for convex probes, rectangle for linear)."""
     if geom.imaging_depth_mm is None or geom.probe_pitch_um is None:
@@ -120,10 +135,17 @@ def canonical_grid(geom: RawGeometry, out_h: int = RF_OUT_H) -> FanGrid:
     )
 
 
-def load_rf_case(case: str, *, out_h: int = RF_OUT_H) -> RfCase | None:
-    """Load the spline's RF acquisition and map the spline into the canonical fan image."""
-    spline_path = C.FLL_ROI_DIR / f"{case}_roi.pkl"
-    sp = load_spline(spline_path) if spline_path.exists() else None
+def load_rf_case(
+    case: str, *, out_h: int = RF_OUT_H, start_depth_factor: float | None = None,
+) -> RfCase | None:
+    """Load the spline's RF acquisition and map the spline into the canonical fan image.
+
+    The newest ROI file of the case is used (see :func:`usloc.labels.splines.find_spline_file`).
+    ``start_depth_factor`` is passed to the QuantUS geometry; leave it ``None`` for ROIs drawn on the
+    original QuantUS picture.
+    """
+    spline_path = find_spline_file(case)
+    sp = load_spline(spline_path) if spline_path is not None else None
     scan = Path(sp.scan_name).stem if sp is not None and sp.scan_name else DEFAULT_SCAN
     roles = find_rf_acquisition(case, scan)
     if roles is None:
@@ -136,7 +158,7 @@ def load_rf_case(case: str, *, out_h: int = RF_OUT_H) -> RfCase | None:
     prescan_poly = polygon = bbox = None
     mask = np.zeros((H, W), dtype=np.uint8)
     if sp is not None and len(sp.x) >= 3:
-        line, sample = spline_to_prescan(sp.x, sp.y, geom)
+        line, sample = spline_to_prescan(sp.x, sp.y, geom, start_depth_factor)
         line = np.clip(line, 0, geom.number_of_lines - 1)
         sample = np.clip(sample, 0, geom.samples_per_line - 1)
         prescan_poly = np.stack([line, sample], axis=1)
@@ -201,8 +223,8 @@ def _register_case_dicom(case: str, space: str, frame: int | None) -> Registered
     region = ultrasound_region(ds_raw)
     _, frames = read_dicom(dcm, deidentify=False)  # raw pixels; we de-identify explicitly below
 
-    spline_path = C.FLL_ROI_DIR / f"{case}_roi.pkl"
-    sp = load_spline(spline_path) if spline_path.exists() else None
+    spline_path = find_spline_file(case)
+    sp = load_spline(spline_path) if spline_path is not None else None
     fr = frame if frame is not None else (sp.frame if sp is not None else frames.shape[0] // 2)
     fr = int(np.clip(fr, 0, frames.shape[0] - 1))
 

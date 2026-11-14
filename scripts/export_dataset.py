@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 
+from usloc.data.cohort import read_case_list
 from usloc.datasets import export_yolo_seg
 
 
@@ -26,6 +27,8 @@ def main() -> None:
     ap.add_argument("--class-agnostic", action="store_true", help="single 'lesion' class")
     ap.add_argument("--corr-thresh", type=float, default=0.85)
     ap.add_argument("--max-frames", type=int, default=40)
+    ap.add_argument("--exclude-file", default=None,
+                    help="cases to leave out of train/val (text file, or CSV with a 'case' column)")
     args = ap.parse_args()
 
     summary = export_yolo_seg(
@@ -33,6 +36,7 @@ def main() -> None:
         seed=args.seed, min_mask_area=args.min_mask_area,
         multiframe=args.multiframe, class_agnostic=args.class_agnostic,
         corr_thresh=args.corr_thresh, max_frames=args.max_frames, source=args.source,
+        exclude=read_case_list(args.exclude_file) if args.exclude_file else (),
     )
     print(json.dumps({k: v for k, v in summary.items() if k != "skipped"}, indent=2))
     print("skipped:", len(summary["skipped"]))

@@ -15,11 +15,10 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .. import config as C
 from ..deid import deidentify_frames, ultrasound_region
 from ..io import read_dicom
 from ..labels.register import _find_0_0_dicom, load_rf_case, spline_offset
-from ..labels.splines import load_spline, rasterize_spline
+from ..labels.splines import find_spline_file, load_spline, rasterize_spline
 from .discover import find_case_dir
 
 
@@ -68,8 +67,8 @@ def _dicom_frames(case: str, space: str):
     dcm = _find_0_0_dicom(case_dir)
     if dcm is None:
         return None
-    spline_path = C.FLL_ROI_DIR / f"{case}_roi.pkl"
-    if not spline_path.exists():
+    spline_path = find_spline_file(case)
+    if spline_path is None:
         return None
 
     import pydicom
